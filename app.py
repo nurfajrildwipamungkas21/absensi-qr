@@ -274,8 +274,6 @@ if submit:
             )
 
         st.success("Absensi berhasil tersimpan. Terima kasih ✅")
-        if link_selfie and link_selfie != "-":
-            st.link_button("🔎 Lihat Selfie (Dropbox)", link_selfie, use_container_width=True)
 
         st.balloons()
 
