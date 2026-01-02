@@ -3,6 +3,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import re
 import io
+import csv
+import html as html_lib
 from typing import Optional, Tuple, Dict, List
 from collections import defaultdict
 import difflib
@@ -16,12 +18,20 @@ from dropbox.exceptions import ApiError, AuthError
 
 import qrcode
 
-# PIL untuk optimasi foto (jika tidak ada, app tetap jalan)
+# Optional libs for better export / image optimization
 try:
     from PIL import Image, ImageOps
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.utils import get_column_letter
+    OPENPYXL_AVAILABLE = True
+except Exception:
+    OPENPYXL_AVAILABLE = False
 
 
 # =========================
@@ -44,10 +54,9 @@ QR_URL = APP_CFG.get("qr_url", "")
 ENABLE_TOKEN = bool(APP_CFG.get("enable_token", False))
 TOKEN_SECRET = str(APP_CFG.get("token", "")).strip()
 
-# Kapasitas baris agar format cukup jauh (hindari format tiap submit)
 DEFAULT_SHEET_ROWS = int(APP_CFG.get("sheet_rows", 10000))
 
-# Optimasi foto (server-side) supaya ringan (HP spek rendah & internet lambat)
+# Optimasi foto untuk HP spek rendah / internet lambat
 IMG_MAX_SIDE = int(APP_CFG.get("img_max_side", 1280))
 IMG_JPEG_QUALITY = int(APP_CFG.get("img_jpeg_quality", 78))
 
@@ -63,30 +72,24 @@ COL_NAMA = "Nama"
 COL_HP = "No HP/WA"
 COL_POSISI = "Posisi"
 COL_LINK_SELFIE = "Bukti Selfie"
-COL_DBX_PATH = "Dropbox Path"  # internal/admin
+COL_DBX_PATH = "Dropbox Path"
 
 SHEET_COLUMNS = [COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, COL_LINK_SELFIE, COL_DBX_PATH]
 
 
 # =========================
-# BRAND UI (CSS + HEADER)
+# UI THEME (CSS)
 # =========================
 def inject_brand_css():
-    """
-    Fix utama:
-    - Force LIGHT scheme (menghindari state hitam + teks gelap)
-    - Override tombol, link_button, download_button, file uploader, expander supaya selalu readable
-    """
     st.markdown(
         f"""
 <style>
-/* ===== Force LIGHT mode rendering (important untuk kasus tombol hitam) ===== */
+/* Force light (mencegah komponen jadi hitam & text tidak kebaca) */
 html, body {{
   color-scheme: light !important;
 }}
 :root {{
   color-scheme: light !important;
-
   --jala-primary: {BRAND_PRIMARY};
   --jala-accent: {BRAND_ACCENT};
   --jala-bg: {BRAND_BG};
@@ -94,20 +97,14 @@ html, body {{
   --jala-muted: #516579;
   --jala-border: rgba(11, 102, 228, 0.18);
   --jala-border-strong: rgba(11, 102, 228, 0.30);
-  --jala-shadow: 0 10px 30px rgba(11, 102, 228, 0.18);
-  --jala-card-shadow: 0 6px 18px rgba(11, 102, 228, 0.10);
-
-  /* Streamlit theme variables (tambahan) */
-  --primary-color: {BRAND_PRIMARY};
-  --background-color: #FFFFFF;
-  --secondary-background-color: {BRAND_BG};
-  --text-color: #0A2540;
+  --jala-shadow: 0 10px 30px rgba(11, 102, 228, 0.14);
+  --jala-card-shadow: 0 6px 16px rgba(11, 102, 228, 0.08);
 }}
 
 [data-testid="stAppViewContainer"] {{
   color-scheme: light !important;
   background: linear-gradient(180deg,
-    rgba(70,194,255,0.16) 0%,
+    rgba(70,194,255,0.14) 0%,
     rgba(245,250,255,1) 18%,
     #FFFFFF 100%) !important;
 }}
@@ -120,25 +117,19 @@ html, body {{
 footer {{ visibility: hidden; }}
 
 [data-testid="stAppViewContainer"] .main .block-container {{
-  padding-top: 1.0rem;
+  padding-top: 0.9rem;
   padding-bottom: 1.2rem;
   max-width: 720px;
 }}
 
-h1,h2,h3,h4 {{
-  color: var(--jala-text) !important;
-  letter-spacing: -0.01em;
-}}
-
-p, label, .stMarkdown, .stCaption {{
+h1,h2,h3,h4, p, label, .stMarkdown, .stCaption {{
   color: var(--jala-text) !important;
 }}
 
-/* ===== Brand Topbar ===== */
 .jala-topbar {{
   background: linear-gradient(135deg, var(--jala-accent) 0%, var(--jala-primary) 62%, #0B4CC7 100%);
   border-radius: 18px;
-  padding: 16px 16px;
+  padding: 14px 14px;
   box-shadow: var(--jala-shadow);
   margin: 0.25rem 0 1rem 0;
   overflow: hidden;
@@ -147,10 +138,10 @@ p, label, .stMarkdown, .stCaption {{
 .jala-topbar:before {{
   content: "";
   position: absolute;
-  top: -80px;
-  right: -120px;
-  width: 260px;
-  height: 260px;
+  top: -90px;
+  right: -130px;
+  width: 280px;
+  height: 280px;
   background: rgba(255,255,255,0.16);
   border-radius: 999px;
 }}
@@ -172,7 +163,7 @@ p, label, .stMarkdown, .stCaption {{
 .jala-tagline {{
   margin-top: 6px;
   font-size: 13px;
-  color: rgba(255,255,255,0.90) !important;
+  color: rgba(255,255,255,0.92) !important;
 }}
 .jala-chip {{
   display: inline-flex;
@@ -187,7 +178,6 @@ p, label, .stMarkdown, .stCaption {{
   white-space: nowrap;
 }}
 
-/* ===== Cards & layout ===== */
 .jala-card {{
   background: rgba(255,255,255,0.96);
   border: 1px solid var(--jala-border);
@@ -205,7 +195,7 @@ p, label, .stMarkdown, .stCaption {{
   margin: 12px 0;
 }}
 
-/* ===== INPUTS (biar tidak ikut dark theme) ===== */
+/* Inputs */
 input, textarea {{
   background: #FFFFFF !important;
   color: var(--jala-text) !important;
@@ -214,12 +204,8 @@ div[data-testid="stTextInput"] input,
 div[data-testid="stTextArea"] textarea {{
   border-radius: 12px !important;
 }}
-div[data-baseweb="input"] {{
-  background: #FFFFFF !important;
-}}
 
-/* ===== BUTTONS (FIX UTAMA: selalu terbaca) ===== */
-/* Base untuk semua button Streamlit */
+/* Buttons */
 div[data-testid="stButton"] button,
 div[data-testid="stDownloadButton"] button,
 div[data-testid="stFormSubmitButton"] button {{
@@ -228,32 +214,21 @@ div[data-testid="stFormSubmitButton"] button {{
   background: #FFFFFF !important;
   color: var(--jala-text) !important;
   border: 1px solid var(--jala-border-strong) !important;
-  box-shadow: none !important;
 }}
-/* Ikon di dalam button */
-div[data-testid="stButton"] button svg,
-div[data-testid="stDownloadButton"] button svg,
-div[data-testid="stFormSubmitButton"] button svg {{
-  color: inherit !important;
-  fill: currentColor !important;
-}}
-/* Hover state */
 div[data-testid="stButton"] button:hover,
 div[data-testid="stDownloadButton"] button:hover {{
   background: rgba(11,102,228,0.06) !important;
-  border-color: rgba(11,102,228,0.38) !important;
+  border-color: rgba(11,102,228,0.45) !important;
 }}
-/* Disabled state */
 div[data-testid="stButton"] button:disabled,
 div[data-testid="stDownloadButton"] button:disabled,
 div[data-testid="stFormSubmitButton"] button:disabled {{
-  opacity: 0.65 !important;
+  opacity: 0.7 !important;
   background: #F2F6FF !important;
   color: rgba(10,37,64,0.75) !important;
   border-color: rgba(11,102,228,0.20) !important;
 }}
-
-/* Submit button: selalu JALA gradient */
+/* Submit gradient */
 div[data-testid="stFormSubmitButton"] button {{
   background: linear-gradient(135deg, var(--jala-accent) 0%, var(--jala-primary) 82%) !important;
   color: #FFFFFF !important;
@@ -263,33 +238,7 @@ div[data-testid="stFormSubmitButton"] button:hover {{
   filter: brightness(1.03) !important;
 }}
 
-/* ===== LINK BUTTON (st.link_button) ===== */
-div[data-testid="stLinkButton"] a,
-div.stLinkButton a {{
-  width: 100% !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 0.5rem !important;
-  text-decoration: none !important;
-
-  border-radius: 14px !important;
-  padding: 0.7rem 1rem !important;
-  background: #FFFFFF !important;
-  color: var(--jala-text) !important;
-  border: 1px solid var(--jala-border-strong) !important;
-}}
-div[data-testid="stLinkButton"] a * ,
-div.stLinkButton a * {{
-  color: inherit !important;
-}}
-div[data-testid="stLinkButton"] a:hover,
-div.stLinkButton a:hover {{
-  background: rgba(11,102,228,0.06) !important;
-  border-color: rgba(11,102,228,0.38) !important;
-}}
-
-/* ===== FILE UPLOADER (biar tidak hitam) ===== */
+/* File uploader */
 div[data-testid="stFileUploaderDropzone"] {{
   background: #FFFFFF !important;
   border: 1px dashed rgba(11,102,228,0.45) !important;
@@ -299,7 +248,6 @@ div[data-testid="stFileUploaderDropzone"] {{
 div[data-testid="stFileUploaderDropzone"] * {{
   color: var(--jala-text) !important;
 }}
-/* Browse files button di uploader */
 div[data-testid="stFileUploaderDropzone"] button {{
   background: #FFFFFF !important;
   color: var(--jala-text) !important;
@@ -310,40 +258,71 @@ div[data-testid="stFileUploaderDropzone"] button:hover {{
   background: rgba(11,102,228,0.06) !important;
 }}
 
-/* ===== EXPANDER (biar tidak hitam) ===== */
-details[data-testid="stExpander"] {{
-  border-radius: 14px !important;
-  overflow: hidden !important;
-}}
-details[data-testid="stExpander"] > summary {{
+/* Expander - FIX open state yang suka berubah jadi hitam */
+details[data-testid="stExpander"] > summary,
+div[data-testid="stExpander"] summary,
+.streamlit-expanderHeader {{
   background: #FFFFFF !important;
+  color: var(--jala-text) !important;
   border: 1px solid var(--jala-border) !important;
   border-radius: 14px !important;
   padding: 10px 12px !important;
 }}
-details[data-testid="stExpander"] > summary * {{
+details[data-testid="stExpander"][open] > summary,
+div[data-testid="stExpander"] details[open] > summary {{
+  background: #FFFFFF !important;
   color: var(--jala-text) !important;
 }}
-details[data-testid="stExpander"] > div {{
+details[data-testid="stExpander"] > summary:hover,
+div[data-testid="stExpander"] summary:hover {{
+  background: rgba(11,102,228,0.06) !important;
+}}
+details[data-testid="stExpander"] > div,
+div[data-testid="stExpander"] details > div {{
   border: 1px solid var(--jala-border) !important;
   border-top: 0 !important;
+  border-radius: 0 0 14px 14px !important;
   background: rgba(255,255,255,0.96) !important;
 }}
+details[data-testid="stExpander"] summary * ,
+div[data-testid="stExpander"] summary * ,
+.streamlit-expanderHeader * {{
+  color: inherit !important;
+}}
 
-/* ===== FORM + METRIC ===== */
-div[data-testid="stForm"] {{
+/* Simple table (untuk rekap) - ringan & konsisten */
+.jala-table-wrap {{
+  width: 100%;
+  overflow-x: auto;
+  background: #FFFFFF;
   border: 1px solid var(--jala-border);
-  border-radius: 16px;
-  padding: 14px;
-  background: rgba(255,255,255,0.96);
+  border-radius: 14px;
   box-shadow: var(--jala-card-shadow);
 }}
-div[data-testid="stMetric"] {{
-  background: rgba(255,255,255,0.96);
-  border: 1px solid var(--jala-border);
-  border-radius: 16px;
-  padding: 10px;
-  box-shadow: var(--jala-card-shadow);
+table.jala-table {{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 520px;
+}}
+table.jala-table th {{
+  background: rgba(245,250,255,1);
+  color: var(--jala-text);
+  text-align: left;
+  font-weight: 700;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(11,102,228,0.14);
+  position: sticky;
+  top: 0;
+}}
+table.jala-table td {{
+  color: var(--jala-text);
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(11,102,228,0.10);
+  vertical-align: top;
+}}
+table.jala-table tr:last-child td {{
+  border-bottom: 0;
 }}
 </style>
         """,
@@ -449,20 +428,11 @@ def get_selfie_bytes(selfie_cam, selfie_upload) -> Tuple[Optional[bytes], str]:
 
 
 def optimize_image_bytes(img_bytes: bytes, ext: str) -> Tuple[bytes, str]:
-    """
-    Optimasi foto supaya upload cepat & hemat data:
-    - perbaiki orientasi EXIF
-    - resize max side
-    - kompres JPEG
-    """
     if not PIL_AVAILABLE:
         return img_bytes, ext
-
     try:
         img = Image.open(io.BytesIO(img_bytes))
         img = ImageOps.exif_transpose(img)
-
-        # Convert ke RGB (wajib untuk JPEG)
         if img.mode not in ("RGB", "L"):
             bg = Image.new("RGB", img.size, (255, 255, 255))
             if img.mode in ("RGBA", "LA"):
@@ -481,38 +451,56 @@ def optimize_image_bytes(img_bytes: bytes, ext: str) -> Tuple[bytes, str]:
             img = img.resize(new_size, Image.LANCZOS)
 
         out = io.BytesIO()
-        img.save(
-            out,
-            format="JPEG",
-            quality=IMG_JPEG_QUALITY,
-            optimize=True,
-            progressive=True,
-        )
+        img.save(out, format="JPEG", quality=IMG_JPEG_QUALITY, optimize=True, progressive=True)
         return out.getvalue(), ".jpg"
     except Exception:
         return img_bytes, ext
 
 
+def escape(s: str) -> str:
+    return html_lib.escape(str(s if s is not None else ""))
+
+
+def render_table(rows: List[Dict], columns: List[str], min_width_px: int = 520):
+    """Render tabel HTML ringan (lebih cepat & konsisten daripada st.dataframe)."""
+    if not rows:
+        st.info("Tidak ada data.")
+        return
+
+    th = "".join([f"<th>{escape(c)}</th>" for c in columns])
+    body_rows = []
+    for r in rows:
+        tds = "".join([f"<td>{escape(r.get(c, ''))}</td>" for c in columns])
+        body_rows.append(f"<tr>{tds}</tr>")
+    tbody = "".join(body_rows)
+
+    st.markdown(
+        f"""
+<div class="jala-table-wrap" style="min-width: 100%;">
+  <table class="jala-table" style="min-width:{min_width_px}px;">
+    <thead><tr>{th}</tr></thead>
+    <tbody>{tbody}</tbody>
+  </table>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # =========================
-# GOOGLE SHEET FORMAT (hemat request)
+# GOOGLE SHEETS
 # =========================
 def auto_format_absensi_sheet(ws):
     try:
         sheet_id = ws.id
         row_count = ws.row_count
-
         col_widths = [170, 180, 150, 180, 140, 340]
         requests = []
 
         for i, w in enumerate(col_widths):
             requests.append({
                 "updateDimensionProperties": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "dimension": "COLUMNS",
-                        "startIndex": i,
-                        "endIndex": i + 1
-                    },
+                    "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
                     "properties": {"pixelSize": w},
                     "fields": "pixelSize"
                 }
@@ -542,14 +530,12 @@ def auto_format_absensi_sheet(ws):
         requests.append({
             "repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count},
-                "cell": {"userEnteredFormat": {
-                    "verticalAlignment": "MIDDLE",
-                    "wrapStrategy": "CLIP"
-                }},
+                "cell": {"userEnteredFormat": {"verticalAlignment": "MIDDLE", "wrapStrategy": "CLIP"}},
                 "fields": "userEnteredFormat(verticalAlignment,wrapStrategy)"
             }
         })
 
+        # Center Timestamp & HP
         requests.append({
             "repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 0, "endColumnIndex": 1},
@@ -565,6 +551,7 @@ def auto_format_absensi_sheet(ws):
             }
         })
 
+        # Wrap Dropbox Path
         requests.append({
             "repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 5, "endColumnIndex": 6},
@@ -574,7 +561,6 @@ def auto_format_absensi_sheet(ws):
         })
 
         ws.spreadsheet.batch_update({"requests": requests})
-
     except Exception as e:
         print(f"Format Absensi Error: {e}")
 
@@ -584,10 +570,7 @@ def connect_gsheet():
     if "gcp_service_account" not in st.secrets:
         raise RuntimeError("GSheet secrets tidak ditemukan: gcp_service_account")
 
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds_dict = dict(st.secrets["gcp_service_account"])
     if "private_key" in creds_dict:
         creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
@@ -601,11 +584,7 @@ def get_or_create_ws(spreadsheet):
     try:
         ws = spreadsheet.worksheet(WORKSHEET_NAME)
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(
-            title=WORKSHEET_NAME,
-            rows=DEFAULT_SHEET_ROWS,
-            cols=len(SHEET_COLUMNS),
-        )
+        ws = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows=DEFAULT_SHEET_ROWS, cols=len(SHEET_COLUMNS))
         ws.append_row(SHEET_COLUMNS, value_input_option="USER_ENTERED")
         auto_format_absensi_sheet(ws)
         return ws
@@ -618,10 +597,12 @@ def get_or_create_ws(spreadsheet):
         ws.resize(cols=max(ws.col_count, len(SHEET_COLUMNS)))
         ws.update("A1", [SHEET_COLUMNS], value_input_option="USER_ENTERED")
         auto_format_absensi_sheet(ws)
-
     return ws
 
 
+# =========================
+# DROPBOX
+# =========================
 @st.cache_resource
 def connect_dropbox():
     if "dropbox" not in st.secrets or "access_token" not in st.secrets["dropbox"]:
@@ -632,13 +613,7 @@ def connect_dropbox():
     return dbx
 
 
-def upload_selfie_to_dropbox(
-    dbx,
-    img_bytes: bytes,
-    nama: str,
-    ts_file: str,
-    ext: str
-) -> Tuple[str, str]:
+def upload_selfie_to_dropbox(dbx, img_bytes: bytes, nama: str, ts_file: str, ext: str) -> Tuple[str, str]:
     clean_name = sanitize_name(nama).replace(" ", "_") or "Unknown"
     filename = f"{ts_file}_selfie{ext}"
     path = f"{DROPBOX_ROOT}/{clean_name}/{filename}"
@@ -664,7 +639,7 @@ def upload_selfie_to_dropbox(
 
 
 # =========================
-# REKAP (PINTAR)
+# REKAP
 # =========================
 def normalize_posisi(text: str) -> str:
     t = str(text or "").strip().lower()
@@ -827,6 +802,158 @@ def get_rekap_today() -> Dict:
 
 
 # =========================
+# EXPORT
+# =========================
+HYPERLINK_RE = re.compile(r'=HYPERLINK\("(?P<url>.*?)"\s*,\s*"(?P<label>.*?)"\)', re.IGNORECASE)
+
+def extract_hyperlink_url(formula_or_value: str) -> str:
+    s = str(formula_or_value or "").strip()
+    if not s:
+        return ""
+    m = HYPERLINK_RE.match(s)
+    if not m:
+        if s.startswith("http://") or s.startswith("https://"):
+            return s
+        return ""
+    url = m.group("url").replace('""', '"')
+    return url
+
+
+def make_csv_bytes(header: List[str], rows: List[List[str]]) -> bytes:
+    """
+    CSV rapi untuk Excel Indonesia:
+    - delimiter ';'
+    - tambah baris pertama 'sep=;' agar Excel auto-parse
+    - encoding utf-8-sig agar aman untuk Excel
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+    buf.write("sep=;\n")
+    writer.writerow(header)
+    for r in rows:
+        writer.writerow(r)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def make_xlsx_bytes(sheet_name: str, header: List[str], rows: List[List[str]], hyperlink_col: Optional[int] = None) -> bytes:
+    if not OPENPYXL_AVAILABLE:
+        raise RuntimeError("openpyxl belum terpasang. Tambahkan 'openpyxl' ke requirements.txt")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name[:31]
+
+    header_fill = PatternFill("solid", fgColor="EAF3FF")
+    header_font = Font(bold=True, color="0A2540")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.append(header)
+    for col_idx in range(1, len(header) + 1):
+        c = ws.cell(row=1, column=col_idx)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = header_align
+
+    ws.freeze_panes = "A2"
+
+    for r in rows:
+        ws.append(r)
+
+    body_align = Alignment(vertical="top", wrap_text=True)
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=len(header)):
+        for cell in row:
+            cell.alignment = body_align
+
+    # hyperlink_col = index 0-based
+    if hyperlink_col is not None and 0 <= hyperlink_col < len(header):
+        col_excel = hyperlink_col + 1
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=col_excel)
+            url = str(cell.value or "").strip()
+            if url.startswith("http://") or url.startswith("https://"):
+                cell.value = "Bukti Foto"
+                cell.hyperlink = url
+                cell.font = Font(color="0B66E4", underline="single")
+
+    # Column widths rapi
+    preset_widths = {}
+    for i, col_name in enumerate(header):
+        name = col_name.lower()
+        if "timestamp" in name:
+            preset_widths[i + 1] = 20
+        elif "nama" in name:
+            preset_widths[i + 1] = 24
+        elif "no hp" in name or "wa" in name:
+            preset_widths[i + 1] = 16
+        elif "posisi" in name:
+            preset_widths[i + 1] = 18
+        elif "dropbox" in name:
+            preset_widths[i + 1] = 46
+        elif "bukti" in name or "selfie" in name:
+            preset_widths[i + 1] = 18
+        else:
+            preset_widths[i + 1] = 18
+
+    for col_idx, w in preset_widths.items():
+        ws.column_dimensions[get_column_letter(col_idx)].width = w
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def build_export_rekap_today(rekap: Dict) -> Tuple[List[str], List[List[str]]]:
+    header = ["Timestamp", "Nama", "No HP/WA", "Posisi"]
+    rows = []
+    for p in rekap.get("all_people", []):
+        rows.append([
+            str(p.get("Timestamp", "")),
+            str(p.get("Nama", "")),
+            str(p.get("No HP/WA", "")),
+            str(p.get("Posisi", "")),
+        ])
+    return header, rows
+
+
+def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
+    sh = connect_gsheet()
+    ws = get_or_create_ws(sh)
+
+    try:
+        values = ws.get("A:F", value_render_option="FORMULA")
+    except TypeError:
+        values = ws.get("A:F")
+
+    if not values or len(values) < 2:
+        return SHEET_COLUMNS, []
+
+    data_rows = values[1:]
+
+    rows = []
+    for r in data_rows:
+        r = (r + [""] * 6)[:6]
+        ts, nama, hp, pos, bukti, dbx_path = r
+
+        url = extract_hyperlink_url(bukti)
+        bukti_out = url if url else ""
+
+        if not (str(ts).strip() or str(nama).strip() or str(hp).strip() or str(pos).strip() or str(bukti_out).strip() or str(dbx_path).strip()):
+            continue
+
+        rows.append([
+            str(ts).strip(),
+            str(nama).strip(),
+            str(hp).strip(),
+            str(pos).strip(),
+            str(bukti_out).strip(),   # URL
+            str(dbx_path).strip(),
+        ])
+
+    export_header = [COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, "Bukti Selfie (URL)", COL_DBX_PATH]
+    return export_header, rows
+
+
+# =========================
 # SESSION DEFAULTS
 # =========================
 if "saving" not in st.session_state:
@@ -834,24 +961,33 @@ if "saving" not in st.session_state:
 if "submitted_once" not in st.session_state:
     st.session_state.submitted_once = False
 if "selfie_method" not in st.session_state:
-    st.session_state.selfie_method = "Upload"  # default ringan
+    st.session_state.selfie_method = "Upload"
+
+if "export_ready" not in st.session_state:
+    st.session_state.export_ready = False
+if "export_xlsx" not in st.session_state:
+    st.session_state.export_xlsx = None
+if "export_csv" not in st.session_state:
+    st.session_state.export_csv = None
+if "export_base_name" not in st.session_state:
+    st.session_state.export_base_name = ""
 
 
 # =========================
-# UI
+# PAGES
 # =========================
 mode = get_mode()
 
 # ===== PAGE: QR / ADMIN
 if mode != "absen":
-    render_header("QR Absensi", f"{BRAND_TAGLINE} • Scan → Isi Form")
+    render_header("QR Absensi", f"{BRAND_TAGLINE} • Scan untuk Absensi")
 
     st.markdown(
         """
 <div class="jala-card">
   <div style="font-weight:700; font-size:16px; margin-bottom:6px;">QR Code Absensi</div>
   <div class="jala-muted">
-    Cetak/Tempel QR ini di lokasi masuk. Karyawan scan QR → langsung ke form absen.
+    Tempel QR ini di area masuk. Karyawan scan QR → isi form → selfie → submit.
   </div>
 </div>
         """,
@@ -880,25 +1016,19 @@ if mode != "absen":
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.write("")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.link_button("🔗 Tes Link Absensi", qr_url_effective, use_container_width=True)
-    with c2:
-        st.download_button(
-            "⬇️ Download QR",
-            data=qr_png,
-            file_name="qr_absensi_jala.png",
-            mime="image/png",
-            use_container_width=True
-        )
+    st.download_button(
+        "⬇️ Download QR",
+        data=qr_png,
+        file_name="qr_absensi_jala.png",
+        mime="image/png",
+        use_container_width=True
+    )
 
-    with st.expander("ℹ️ Tips Penggunaan"):
-        st.write(
-            "- Pastikan URL aplikasi **HTTPS**.\n"
-            "- Untuk HP jadul: gunakan **Upload foto**.\n"
-            "- Jika pakai token, QR mengandung `token=...`.\n"
-            "- Untuk koneksi lambat: sistem akan mengoptimalkan foto otomatis."
-        )
+    # (mengganti tombol "Tes Link Absensi" -> jadi info admin saja)
+    with st.expander("ℹ️ Info Admin"):
+        st.write("**Link Form Absensi:**")
+        st.code(qr_url_effective, language="text")
+        st.caption("Gunakan link ini untuk kebutuhan admin. Untuk karyawan, gunakan QR.")
 
     st.markdown(
         f"""
@@ -927,11 +1057,10 @@ if ENABLE_TOKEN and TOKEN_SECRET:
 st.markdown(
     """
 <div class="jala-card">
-  <div style="font-weight:700; font-size:16px; margin-bottom:6px;">Petunjuk Singkat</div>
+  <div style="font-weight:700; font-size:16px; margin-bottom:6px;">Petunjuk</div>
   <div class="jala-muted">
-    Isi data karyawan lalu unggah/ambil selfie kehadiran.
-    Jika ada izin kamera, pilih <b>Allow / Izinkan</b>.
-    Untuk HP tertentu, pilih metode <b>Upload</b>.
+    Isi data karyawan, pilih metode selfie, lalu submit.
+    Jika kamera bermasalah, gunakan <b>Upload</b>.
   </div>
 </div>
     """,
@@ -948,9 +1077,8 @@ with st.form("form_absen", clear_on_submit=False):
     st.markdown('<div class="jala-divider"></div>', unsafe_allow_html=True)
 
     st.subheader("2) Selfie Kehadiran")
-
     method = st.radio(
-        "Pilih metode selfie",
+        "Metode selfie",
         options=["Upload (lebih stabil)", "Kamera (jika HP mendukung)"],
         index=0 if st.session_state.selfie_method == "Upload" else 1,
         horizontal=False,
@@ -961,10 +1089,10 @@ with st.form("form_absen", clear_on_submit=False):
     selfie_upload = None
 
     if st.session_state.selfie_method == "Kamera":
-        st.caption("Jika kamera blank/lemot, kembali pilih metode Upload.")
+        st.caption("Jika kamera blank/lemot, pilih Upload.")
         selfie_cam = st.camera_input("Ambil selfie")
     else:
-        st.caption("Pilih foto yang wajar. Sistem akan mengoptimalkan foto otomatis agar hemat kuota.")
+        st.caption("Foto akan dioptimalkan otomatis agar hemat kuota.")
         selfie_upload = st.file_uploader("Upload foto selfie", type=["jpg", "jpeg", "png"])
 
     st.markdown('<div class="jala-divider"></div>', unsafe_allow_html=True)
@@ -975,7 +1103,6 @@ with st.form("form_absen", clear_on_submit=False):
         use_container_width=True,
     )
 
-# ===== SUBMIT LOGIC
 if submit:
     if st.session_state.submitted_once:
         st.warning("Absensi sudah tersimpan. Jika ingin absen lagi, refresh halaman.")
@@ -984,7 +1111,6 @@ if submit:
     nama_clean = sanitize_name(nama)
     hp_clean = sanitize_phone(no_hp)
     posisi_final = str(posisi).strip()
-
     img_bytes, ext = get_selfie_bytes(selfie_cam, selfie_upload)
 
     errors = []
@@ -1010,10 +1136,7 @@ if submit:
             ws = get_or_create_ws(sh)
             dbx = connect_dropbox()
 
-            link_selfie, dbx_path = upload_selfie_to_dropbox(
-                dbx, img_bytes_opt, nama_clean, ts_file, ext_opt
-            )
-
+            link_selfie, dbx_path = upload_selfie_to_dropbox(dbx, img_bytes_opt, nama_clean, ts_file, ext_opt)
             link_cell = make_hyperlink(link_selfie, "Bukti Foto")
 
             ws.append_row(
@@ -1022,10 +1145,8 @@ if submit:
             )
 
         get_rekap_today.clear()
-
         st.session_state.submitted_once = True
         st.success("Absensi berhasil tersimpan. Terima kasih ✅")
-        st.balloons()
 
         if st.button("↩️ Isi ulang (reset form)", use_container_width=True):
             st.session_state.saving = False
@@ -1043,9 +1164,7 @@ if submit:
         st.session_state.saving = False
 
 
-# =========================
-# REKAP
-# =========================
+# ===== REKAP UI
 st.write("")
 st.subheader("📊 Rekap Kehadiran (Hari ini)")
 
@@ -1064,8 +1183,8 @@ try:
 
     if rekap["dup_removed"] > 0:
         st.info(
-            f"Catatan: terdeteksi **{rekap['dup_removed']}** entri duplikat "
-            f"(No HP/Nama sama) dan tidak dihitung agar rekap akurat."
+            f"Catatan: terdeteksi **{rekap['dup_removed']}** entri duplikat (No HP/Nama sama) "
+            f"dan tidak dihitung agar rekap akurat."
         )
 
     if rekap["total"] == 0:
@@ -1073,16 +1192,93 @@ try:
     else:
         st.markdown(
             """
-<div class="jala-card">
+<div class="jala-card" style="margin-bottom: 10px;">
   <div style="font-weight:700; margin-bottom:8px;">Klasifikasi jumlah hadir per posisi</div>
 </div>
             """,
             unsafe_allow_html=True,
         )
-        st.dataframe(rekap["by_pos"], use_container_width=True, hide_index=True)
+        render_table(rekap["by_pos"], columns=["Posisi", "Jumlah", "Yang Hadir"], min_width_px=640)
 
         with st.expander("👥 Lihat siapa saja yang sudah datang (detail)"):
-            st.dataframe(rekap["all_people"], use_container_width=True, hide_index=True)
+            render_table(rekap["all_people"], columns=["Nama", "No HP/WA", "Posisi", "Timestamp"], min_width_px=640)
+
+    # ===== EXPORT
+    with st.expander("⬇️ Download Rekap (Excel / CSV)"):
+        st.markdown(
+            """
+<div class="jala-muted">
+Unduh data dengan format rapi:
+<b>XLSX</b> (paling aman untuk Excel) atau <b>CSV</b> (pakai delimiter <code>;</code> agar tidak jadi 1 kolom).
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        scope = st.radio(
+            "Pilih data yang diunduh",
+            options=["Rekap Hari Ini (dedup)", "Log Lengkap (semua data)"],
+            index=0,
+            horizontal=False,
+        )
+
+        cA, cB = st.columns([1, 1])
+        with cA:
+            prep = st.button("📦 Siapkan File", use_container_width=True)
+        with cB:
+            if st.button("🧹 Reset file", use_container_width=True):
+                st.session_state.export_ready = False
+                st.session_state.export_xlsx = None
+                st.session_state.export_csv = None
+                st.session_state.export_base_name = ""
+                st.rerun()
+
+        if prep:
+            try:
+                with st.spinner("Menyiapkan file export..."):
+                    ts_tag = now_local().strftime("%Y-%m-%d_%H-%M")
+
+                    if scope.startswith("Rekap"):
+                        header, rows = build_export_rekap_today(rekap)
+                        base = f"rekap_hadir_{rekap['today'].replace('-', '')}_{ts_tag}"
+                        xlsx = make_xlsx_bytes("Rekap Hari Ini", header, rows, hyperlink_col=None)
+                        csv_b = make_csv_bytes(header, rows)
+                    else:
+                        header, rows = fetch_log_full()
+                        base = f"log_absensi_{ts_tag}"
+                        # hyperlink_col = kolom "Bukti Selfie (URL)" => index 4
+                        xlsx = make_xlsx_bytes("Log Absensi", header, rows, hyperlink_col=4)
+                        csv_b = make_csv_bytes(header, rows)
+
+                    st.session_state.export_xlsx = xlsx
+                    st.session_state.export_csv = csv_b
+                    st.session_state.export_base_name = base
+                    st.session_state.export_ready = True
+
+                st.success("File siap diunduh ✅")
+            except Exception as ex:
+                st.error("Gagal menyiapkan file export.")
+                st.code(str(ex))
+
+        if st.session_state.export_ready and st.session_state.export_xlsx and st.session_state.export_csv:
+            st.write("")
+            d1, d2 = st.columns(2)
+            with d1:
+                st.download_button(
+                    "⬇️ Download XLSX",
+                    data=st.session_state.export_xlsx,
+                    file_name=f"{st.session_state.export_base_name}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            with d2:
+                st.download_button(
+                    "⬇️ Download CSV",
+                    data=st.session_state.export_csv,
+                    file_name=f"{st.session_state.export_base_name}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 
 except Exception as e:
     st.warning("Rekap kehadiran belum bisa ditampilkan (cek koneksi GSheet).")
@@ -1091,7 +1287,7 @@ except Exception as e:
 
 st.markdown(
     f"""
-<div style="text-align:center; margin-top: 12px;" class="jala-muted">
+<div style="text-align:center; margin-top: 14px;" class="jala-muted">
   © {BRAND_TAGLINE} • Absensi QR
 </div>
     """,
