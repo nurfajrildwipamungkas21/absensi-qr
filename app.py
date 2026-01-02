@@ -33,8 +33,8 @@ COL_TIMESTAMP = "Timestamp"
 COL_NAMA = "Nama"
 COL_HP = "No HP/WA"
 COL_POSISI = "Posisi"
-COL_LINK_SELFIE = "Link Selfie"
-COL_DBX_PATH = "Dropbox Path"
+COL_LINK_SELFIE = "Bukti Selfie"     # tampil lebih professional
+COL_DBX_PATH = "Dropbox Path"        # internal/admin
 
 SHEET_COLUMNS = [COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, COL_LINK_SELFIE, COL_DBX_PATH]
 
@@ -92,6 +92,110 @@ def build_qr_png(url: str) -> bytes:
     return buf.getvalue()
 
 
+def make_hyperlink(url: str, label: str = "Bukti Foto") -> str:
+    """Supaya kolom link rapi di GSheet/Excel."""
+    if not url or url == "-":
+        return "-"
+    safe = url.replace('"', '""')  # escape double quote untuk formula
+    return f'=HYPERLINK("{safe}", "{label}")'
+
+
+def auto_format_absensi_sheet(ws):
+    """Format Google Sheet Absensi agar rapi & profesional."""
+    try:
+        sheet_id = ws.id
+        all_values = ws.get_all_values()
+        row_count = max(len(all_values), ws.row_count)
+
+        # Lebar kolom A-F (sesuaikan kalau mau)
+        # A Timestamp, B Nama, C No HP/WA, D Posisi, E Bukti Selfie, F Dropbox Path
+        col_widths = [170, 180, 150, 180, 140, 340]
+
+        requests = []
+
+        # 1) Set lebar kolom
+        for i, w in enumerate(col_widths):
+            requests.append({
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": i,
+                        "endIndex": i + 1
+                    },
+                    "properties": {"pixelSize": w},
+                    "fields": "pixelSize"
+                }
+            })
+
+        # 2) Header styling (row 1)
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
+                "cell": {"userEnteredFormat": {
+                    "textFormat": {"bold": True},
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "backgroundColor": {"red": 0.93, "green": 0.93, "blue": 0.93},
+                    "wrapStrategy": "WRAP"
+                }},
+                "fields": "userEnteredFormat(textFormat,horizontalAlignment,verticalAlignment,backgroundColor,wrapStrategy)"
+            }
+        })
+
+        # 3) Freeze header
+        requests.append({
+            "updateSheetProperties": {
+                "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+                "fields": "gridProperties.frozenRowCount"
+            }
+        })
+
+        # 4) Body default format
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count},
+                "cell": {"userEnteredFormat": {
+                    "verticalAlignment": "MIDDLE",
+                    "wrapStrategy": "CLIP"
+                }},
+                "fields": "userEnteredFormat(verticalAlignment,wrapStrategy)"
+            }
+        })
+
+        # 5) Center: Timestamp (A) & No HP (C)
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 0, "endColumnIndex": 1},
+                "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+                "fields": "userEnteredFormat(horizontalAlignment)"
+            }
+        })
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 2, "endColumnIndex": 3},
+                "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+                "fields": "userEnteredFormat(horizontalAlignment)"
+            }
+        })
+
+        # 6) Wrap untuk Dropbox Path (F) biar path panjang tetap rapi
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 5, "endColumnIndex": 6},
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+                "fields": "userEnteredFormat(wrapStrategy)"
+            }
+        })
+
+        if requests:
+            ws.spreadsheet.batch_update({"requests": requests})
+
+    except Exception as e:
+        # jangan bikin app crash kalau format gagal
+        print(f"Format Absensi Error: {e}")
+
+
 @st.cache_resource
 def connect_gsheet():
     if "gcp_service_account" not in st.secrets:
@@ -116,11 +220,15 @@ def get_or_create_ws(spreadsheet):
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows=5000, cols=len(SHEET_COLUMNS))
         ws.append_row(SHEET_COLUMNS, value_input_option="USER_ENTERED")
+        auto_format_absensi_sheet(ws)
+        return ws
 
     header = ws.row_values(1)
     if header != SHEET_COLUMNS:
         ws.resize(cols=max(ws.col_count, len(SHEET_COLUMNS)))
         ws.update("A1", [SHEET_COLUMNS], value_input_option="USER_ENTERED")
+        auto_format_absensi_sheet(ws)
+
     return ws
 
 
@@ -156,7 +264,6 @@ def upload_selfie_to_dropbox(
         link = dbx.sharing_create_shared_link_with_settings(path, settings=settings)
         url = link.url
     except ApiError as e:
-        # kalau link sudah ada, ambil yang existing
         try:
             if e.error.is_shared_link_already_exists():
                 links = dbx.sharing_list_shared_links(path, direct_only=True).links
@@ -178,7 +285,7 @@ def detect_ext_and_mime(mime: str) -> str:
 
 def get_selfie_bytes(selfie_cam, selfie_upload) -> Tuple[Optional[bytes], str]:
     """
-    Return (bytes, ext). ext default .jpg/.png sesuai mime.
+    Return (bytes, ext).
     """
     if selfie_cam is not None:
         mime = getattr(selfie_cam, "type", "") or ""
@@ -272,8 +379,6 @@ with st.form("form_absen", clear_on_submit=False):
 
     nama = st.text_input("Nama Lengkap", placeholder="Contoh: Andi Saputra")
     no_hp = st.text_input("No HP/WA", placeholder="Contoh: 08xxxxxxxxxx atau +628xxxxxxxxxx")
-
-    # ✅ POSISI MANUAL
     posisi = st.text_input("Posisi / Jabatan", placeholder="Contoh: Driver / Teknisi / Supervisor")
 
     st.divider()
@@ -328,15 +433,20 @@ if submit:
         with st.spinner("Menyimpan absensi..."):
             sh = connect_gsheet()
             ws = get_or_create_ws(sh)
-
             dbx = connect_dropbox()
 
             link_selfie, dbx_path = upload_selfie_to_dropbox(dbx, img_bytes, nama_clean, ts_file, ext)
 
+            # ✅ buat link rapi (tidak panjang)
+            link_cell = make_hyperlink(link_selfie, "Bukti Foto")
+
             ws.append_row(
-                [ts_display, nama_clean, hp_clean, posisi_final, link_selfie, dbx_path],
+                [ts_display, nama_clean, hp_clean, posisi_final, link_cell, dbx_path],
                 value_input_option="USER_ENTERED"
             )
+
+            # ✅ format ulang agar kalau row bertambah tetap rapi (aman dipanggil)
+            auto_format_absensi_sheet(ws)
 
         st.session_state.submitted_once = True
         st.success("Absensi berhasil tersimpan. Terima kasih ✅")
