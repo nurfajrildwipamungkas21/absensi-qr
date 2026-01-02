@@ -29,9 +29,6 @@ QR_URL = APP_CFG.get("qr_url", "")
 ENABLE_TOKEN = bool(APP_CFG.get("enable_token", False))
 TOKEN_SECRET = str(APP_CFG.get("token", "")).strip()
 
-# Optional: daftar posisi biar lebih cepat & rapi (bisa kamu ubah)
-POSISI_OPTIONS = APP_CFG.get("posisi_options", ["Sales", "Admin", "Marketing", "Gudang", "Driver", "Lainnya"])
-
 COL_TIMESTAMP = "Timestamp"
 COL_NAMA = "Nama"
 COL_HP = "No HP/WA"
@@ -53,6 +50,7 @@ def get_mode() -> str:
         qp = st.experimental_get_query_params()
         return (qp.get("mode", [""])[0] or "").strip().lower()
 
+
 def get_token_from_url() -> str:
     try:
         return str(st.query_params.get("token", "")).strip()
@@ -60,11 +58,13 @@ def get_token_from_url() -> str:
         qp = st.experimental_get_query_params()
         return (qp.get("token", [""])[0] or "").strip()
 
+
 def sanitize_name(text: str) -> str:
     text = str(text).strip()
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"[^A-Za-z0-9 _.-]", "", text)
     return text.strip()
+
 
 def sanitize_phone(text: str) -> str:
     text = str(text).strip()
@@ -72,8 +72,10 @@ def sanitize_phone(text: str) -> str:
         return "+" + re.sub(r"\D", "", text[1:])
     return re.sub(r"\D", "", text)
 
+
 def now_local():
     return datetime.now(tz=ZoneInfo(TZ_NAME))
+
 
 def build_qr_png(url: str) -> bytes:
     qr = qrcode.QRCode(
@@ -88,6 +90,7 @@ def build_qr_png(url: str) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
 
 @st.cache_resource
 def connect_gsheet():
@@ -106,6 +109,7 @@ def connect_gsheet():
     gc = gspread.authorize(creds)
     return gc.open(SHEET_NAME)
 
+
 def get_or_create_ws(spreadsheet):
     try:
         ws = spreadsheet.worksheet(WORKSHEET_NAME)
@@ -119,6 +123,7 @@ def get_or_create_ws(spreadsheet):
         ws.update("A1", [SHEET_COLUMNS], value_input_option="USER_ENTERED")
     return ws
 
+
 @st.cache_resource
 def connect_dropbox():
     if "dropbox" not in st.secrets or "access_token" not in st.secrets["dropbox"]:
@@ -127,6 +132,7 @@ def connect_dropbox():
     dbx = dropbox.Dropbox(st.secrets["dropbox"]["access_token"])
     dbx.users_get_current_account()
     return dbx
+
 
 def upload_selfie_to_dropbox(
     dbx,
@@ -162,11 +168,13 @@ def upload_selfie_to_dropbox(
     url_raw = url.replace("?dl=0", "?raw=1") if url and url != "-" else "-"
     return url_raw, path
 
+
 def detect_ext_and_mime(mime: str) -> str:
     mime = (mime or "").lower()
     if "png" in mime:
         return ".png"
     return ".jpg"
+
 
 def get_selfie_bytes(selfie_cam, selfie_upload) -> Tuple[Optional[bytes], str]:
     """
@@ -257,25 +265,20 @@ ts_display = dt.strftime("%d-%m-%Y %H:%M:%S")
 ts_file = dt.strftime("%Y-%m-%d_%H-%M-%S")
 st.caption(f"🕒 Waktu server ({TZ_NAME}): **{ts_display}**")
 
-# Banner kecil supaya user paham kamera butuh izin
 st.info("Jika muncul pop-up izin kamera, pilih **Allow / Izinkan**. Untuk HP tertentu, gunakan **Upload foto**.")
 
-# Gunakan form supaya submit lebih rapi dan input tidak “ke-reset” saat rerun
 with st.form("form_absen", clear_on_submit=False):
     st.subheader("1) Data Karyawan")
 
     nama = st.text_input("Nama Lengkap", placeholder="Contoh: Andi Saputra")
     no_hp = st.text_input("No HP/WA", placeholder="Contoh: 08xxxxxxxxxx atau +628xxxxxxxxxx")
 
-    posisi_choice = st.selectbox("Posisi / Jabatan", POSISI_OPTIONS, index=0)
-    posisi_manual = ""
-    if posisi_choice.lower() == "lainnya":
-        posisi_manual = st.text_input("Tulis posisi", placeholder="Contoh: Teknisi")
+    # ✅ POSISI MANUAL
+    posisi = st.text_input("Posisi / Jabatan", placeholder="Contoh: Driver / Teknisi / Supervisor")
 
     st.divider()
     st.subheader("2) Selfie Kehadiran")
 
-    # Tombol untuk “gesture” user sebelum kamera diminta (lebih kompatibel untuk HP jadul)
     open_cam_now = st.checkbox("Buka kamera (disarankan jika HP mendukung)", value=st.session_state.open_cam)
     st.session_state.open_cam = open_cam_now
 
@@ -288,7 +291,6 @@ with st.form("form_absen", clear_on_submit=False):
 
     st.divider()
 
-    # tombol submit
     submit = st.form_submit_button(
         "✅ Submit Absensi",
         disabled=st.session_state.saving or st.session_state.submitted_once,
@@ -297,26 +299,22 @@ with st.form("form_absen", clear_on_submit=False):
 
 # ===== SUBMIT LOGIC
 if submit:
-    # cegah double submit di sesi yang sama
     if st.session_state.submitted_once:
         st.warning("Absensi sudah tersimpan. Jika ingin absen lagi, refresh halaman.")
         st.stop()
 
     nama_clean = sanitize_name(nama)
     hp_clean = sanitize_phone(no_hp)
+    posisi_final = str(posisi).strip()
 
-    posisi_final = (posisi_manual or posisi_choice or "").strip()
-
-    # selfie bytes (kamera atau upload)
     img_bytes, ext = get_selfie_bytes(selfie_cam, selfie_upload)
 
-    # VALIDASI (lebih jelas)
     errors = []
     if not nama_clean:
         errors.append("• Nama wajib diisi.")
     if not hp_clean or len(hp_clean.replace("+", "")) < 8:
         errors.append("• No HP/WA wajib diisi (minimal 8 digit).")
-    if not posisi_final or posisi_final.lower() == "lainnya":
+    if not posisi_final:
         errors.append("• Posisi wajib diisi.")
     if img_bytes is None:
         errors.append("• Selfie wajib (kamera atau upload).")
@@ -325,7 +323,6 @@ if submit:
         st.error("Mohon lengkapi dulu:\n\n" + "\n".join(errors))
         st.stop()
 
-    # Simpan
     st.session_state.saving = True
     try:
         with st.spinner("Menyimpan absensi..."):
@@ -345,7 +342,6 @@ if submit:
         st.success("Absensi berhasil tersimpan. Terima kasih ✅")
         st.balloons()
 
-        # tombol reset agar bisa absen lagi tanpa refresh manual (opsional)
         if st.button("↩️ Isi ulang (reset form)", use_container_width=True):
             st.session_state.open_cam = False
             st.session_state.saving = False
