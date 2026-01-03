@@ -990,8 +990,10 @@ def make_xlsx_bytes(
     # --- Column widths
     preset_widths = {}
     for i, col_name in enumerate(header):
-        name = col_name.lower()
-        if "timestamp" in name:
+        name = col_name.lower().strip()
+        if name in ("no", "nomor"):
+            preset_widths[i + 1] = 6
+        elif "timestamp" in name:
             preset_widths[i + 1] = 20
         elif "nama" in name:
             preset_widths[i + 1] = 24
@@ -1014,11 +1016,13 @@ def make_xlsx_bytes(
     return out.getvalue()
 
 
+# ✅ REVISI: tambah kolom "No" untuk export rekap hari ini
 def build_export_rekap_today(rekap: Dict) -> Tuple[List[str], List[List[str]]]:
-    header = ["Timestamp", "Nama", "No HP/WA", "Posisi"]
+    header = ["No", "Timestamp", "Nama", "No HP/WA", "Posisi"]
     rows = []
-    for p in rekap.get("all_people", []):
+    for i, p in enumerate(rekap.get("all_people", []), start=1):
         rows.append([
+            str(i),
             str(p.get("Timestamp", "")),
             str(p.get("Nama", "")),
             str(p.get("No HP/WA", "")),
@@ -1027,6 +1031,7 @@ def build_export_rekap_today(rekap: Dict) -> Tuple[List[str], List[List[str]]]:
     return header, rows
 
 
+# ✅ REVISI: tambah kolom "No" untuk export log lengkap + sesuaikan hyperlink col
 def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
     sh = connect_gsheet()
     ws = get_or_create_ws(sh)
@@ -1036,8 +1041,10 @@ def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
     except TypeError:
         values = ws.get("A:F")
 
+    export_header = ["No", COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, "Bukti Selfie (URL)", COL_DBX_PATH]
+
     if not values or len(values) < 2:
-        return SHEET_COLUMNS, []
+        return export_header, []
 
     data_rows = values[1:]
 
@@ -1068,8 +1075,11 @@ def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
             str(dbx_path).strip(),
         ])
 
-    export_header = [COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, "Bukti Selfie (URL)", COL_DBX_PATH]
-    return export_header, rows
+    numbered_rows = []
+    for i, r in enumerate(rows, start=1):
+        numbered_rows.append([str(i)] + r)
+
+    return export_header, numbered_rows
 
 
 # =========================
@@ -1370,12 +1380,12 @@ Unduh data dengan format rapi:
                     else:
                         header, rows = fetch_log_full()
                         base = f"log_absensi_{ts_tag}"
-                        # hyperlink_col = kolom "Bukti Selfie (URL)" => index 4
+                        # hyperlink_col = kolom "Bukti Selfie (URL)" => index 5 (karena ada kolom "No" di depan)
                         xlsx = make_xlsx_bytes(
                             "Log Absensi",
                             header,
                             rows,
-                            hyperlink_col=4,
+                            hyperlink_col=5,
                             top_header_lines=EXPORT_TOP_HEADER_LINES,
                         )
                         csv_b = make_csv_bytes(header, rows)
