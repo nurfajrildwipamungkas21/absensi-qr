@@ -9,6 +9,9 @@ from typing import Optional, Tuple, Dict, List
 from collections import defaultdict
 import difflib
 
+import os
+import base64
+
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -67,6 +70,9 @@ BRAND_PRIMARY = str(APP_CFG.get("brand_primary", "#0B66E4")).strip() or "#0B66E4
 BRAND_ACCENT = str(APP_CFG.get("brand_accent", "#46C2FF")).strip() or "#46C2FF"
 BRAND_BG = str(APP_CFG.get("brand_bg", "#F5FAFF")).strip() or "#F5FAFF"
 
+# ✅ Logo path (default ke assets/jala.png)
+LOGO_PATH = str(APP_CFG.get("logo_path", "assets/jala.png")).strip() or "assets/jala.png"
+
 COL_TIMESTAMP = "Timestamp"
 COL_NAMA = "Nama"
 COL_HP = "No HP/WA"
@@ -124,6 +130,23 @@ footer {{ visibility: hidden; }}
 
 h1,h2,h3,h4, p, label, .stMarkdown, .stCaption {{
   color: var(--jala-text) !important;
+}}
+
+/* ✅ Logo di atas header */
+.jala-logo-wrap {{
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 0.35rem 0 -0.15rem 0;
+}}
+.jala-logo {{
+  height: 54px;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 22px rgba(11, 102, 228, 0.18));
+}}
+@media (max-width: 480px) {{
+  .jala-logo {{ height: 46px; }}
 }}
 
 .jala-topbar {{
@@ -330,7 +353,40 @@ table.jala-table tr:last-child td {{
     )
 
 
+# ✅ helper logo (diletakkan sebelum render_header agar bisa dipakai)
+def _abs_path(rel_path: str) -> str:
+    base = os.path.dirname(__file__)
+    return os.path.join(base, rel_path)
+
+@st.cache_data(show_spinner=False)
+def load_logo_data_uri(path: str) -> str:
+    if not path:
+        return ""
+    full = _abs_path(path)
+    if not os.path.exists(full):
+        return ""
+
+    ext = os.path.splitext(full)[1].lower().replace(".", "")
+    mime = "png" if ext == "png" else ("webp" if ext == "webp" else "jpeg")
+
+    with open(full, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:image/{mime};base64,{b64}"
+
+
 def render_header(chip_text: str, subtitle: str):
+    logo_uri = load_logo_data_uri(LOGO_PATH)
+
+    if logo_uri:
+        st.markdown(
+            f"""
+<div class="jala-logo-wrap">
+  <img class="jala-logo" src="{logo_uri}" alt="{BRAND_NAME} logo"/>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     st.markdown(
         f"""
 <div class="jala-topbar">
@@ -1109,6 +1165,7 @@ if submit:
         st.stop()
 
     nama_clean = sanitize_name(nama)
+    # FIX: variabel no_hp yang benar adalah `no_hp`
     hp_clean = sanitize_phone(no_hp)
     posisi_final = str(posisi).strip()
     img_bytes, ext = get_selfie_bytes(selfie_cam, selfie_upload)
