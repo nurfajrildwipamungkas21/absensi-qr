@@ -83,7 +83,6 @@ COL_DBX_PATH = "Dropbox Path"
 SHEET_COLUMNS = [COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, COL_LINK_SELFIE, COL_DBX_PATH]
 
 # ✅ Header atas untuk file XLSX (merged di atas tabel)
-# Revisi: baris 2 jadi satu, tahun jadi 2026, tambah "Kick Off Meeting 2026"
 EXPORT_TOP_HEADER_LINES = [
     "JALA",
     "Eastparc Hotel Yogyakarta, 09 January 2026",
@@ -942,7 +941,6 @@ def make_xlsx_bytes(
             c.alignment = center
             c.font = title_font if i == 1 else subtitle_font
 
-            # tinggi baris biar proporsional
             ws.row_dimensions[current_row].height = 26 if i == 1 else 18
 
         # spacer row
@@ -963,7 +961,7 @@ def make_xlsx_bytes(
 
     ws.row_dimensions[table_header_row].height = 20
 
-    # Freeze sampai baris header tabel (biar scroll tetap enak)
+    # Freeze sampai baris header tabel
     data_start_row = table_header_row + 1
     ws.freeze_panes = f"A{data_start_row}"
 
@@ -1016,7 +1014,7 @@ def make_xlsx_bytes(
     return out.getvalue()
 
 
-# ✅ REVISI: tambah kolom "No" untuk export rekap hari ini
+# ✅ Export rekap hari ini: sudah ada kolom "No"
 def build_export_rekap_today(rekap: Dict) -> Tuple[List[str], List[List[str]]]:
     header = ["No", "Timestamp", "Nama", "No HP/WA", "Posisi"]
     rows = []
@@ -1031,29 +1029,52 @@ def build_export_rekap_today(rekap: Dict) -> Tuple[List[str], List[List[str]]]:
     return header, rows
 
 
-# ✅ REVISI: tambah kolom "No" untuk export log lengkap + sesuaikan hyperlink col
+# ✅ FIX Timestamp export:
+# - A:D ambil FORMATTED_VALUE (biar Timestamp tidak jadi 46082.xxx)
+# - E ambil FORMULA (biar bisa ekstrak URL HYPERLINK)
+# - F ambil FORMATTED_VALUE
 def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
     sh = connect_gsheet()
     ws = get_or_create_ws(sh)
 
-    try:
-        values = ws.get("A:F", value_render_option="FORMULA")
-    except TypeError:
-        values = ws.get("A:F")
-
     export_header = ["No", COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, "Bukti Selfie (URL)", COL_DBX_PATH]
 
-    if not values or len(values) < 2:
+    # A:D formatted
+    try:
+        ad = ws.get("A:D", value_render_option="FORMATTED_VALUE")
+    except TypeError:
+        ad = ws.get("A:D")
+
+    # E formula
+    try:
+        e_col = ws.get("E:E", value_render_option="FORMULA")
+    except TypeError:
+        e_col = ws.get("E:E")
+
+    # F formatted
+    try:
+        f_col = ws.get("F:F", value_render_option="FORMATTED_VALUE")
+    except TypeError:
+        f_col = ws.get("F:F")
+
+    if not ad or len(ad) < 2:
         return export_header, []
 
-    data_rows = values[1:]
+    max_len = max(len(ad), len(e_col) if e_col else 0, len(f_col) if f_col else 0)
 
     rows = []
-    for r in data_rows:
-        r = (r + [""] * 6)[:6]
-        ts, nama, hp, pos, bukti, dbx_path = r
+    for i in range(1, max_len):  # start from data row (skip header)
+        row_ad = ad[i] if i < len(ad) else []
+        row_e = e_col[i] if (e_col and i < len(e_col)) else []
+        row_f = f_col[i] if (f_col and i < len(f_col)) else []
 
-        url = extract_hyperlink_url(bukti)
+        row_ad = (row_ad + [""] * 4)[:4]
+        ts, nama, hp, pos = row_ad
+
+        bukti_formula = (row_e[0] if row_e else "") or ""
+        dbx_path = (row_f[0] if row_f else "") or ""
+
+        url = extract_hyperlink_url(bukti_formula)
         bukti_out = url if url else ""
 
         if not (
@@ -1071,13 +1092,13 @@ def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
             str(nama).strip(),
             str(hp).strip(),
             str(pos).strip(),
-            str(bukti_out).strip(),  # URL
+            str(bukti_out).strip(),
             str(dbx_path).strip(),
         ])
 
     numbered_rows = []
-    for i, r in enumerate(rows, start=1):
-        numbered_rows.append([str(i)] + r)
+    for idx, r in enumerate(rows, start=1):
+        numbered_rows.append([str(idx)] + r)
 
     return export_header, numbered_rows
 
@@ -1170,11 +1191,10 @@ if mode != "absen":
 
 
 # ===== PAGE: ABSEN
-dt = now_local()
-ts_display = dt.strftime("%d-%m-%Y %H:%M:%S")
-ts_file = dt.strftime("%Y-%m-%d_%H-%M-%S")
-
-render_header("Form Absensi", f"{BRAND_TAGLINE} • {ts_display} ({TZ_NAME})")
+# ✅ UI timestamp boleh realtime saat render (hanya untuk tampil di header)
+ui_dt = now_local()
+ui_ts_display = ui_dt.strftime("%d-%m-%Y %H:%M:%S")
+render_header("Form Absensi", f"{BRAND_TAGLINE} • {ui_ts_display} ({TZ_NAME})")
 
 if ENABLE_TOKEN and TOKEN_SECRET:
     incoming_token = get_token_from_url()
@@ -1235,6 +1255,11 @@ if submit:
     if st.session_state.submitted_once:
         st.warning("Absensi sudah tersimpan. Jika ingin absen lagi, refresh halaman.")
         st.stop()
+
+    # ✅ Timestamp HARUS dibuat saat tombol submit ditekan (biar akurat)
+    save_dt = now_local()
+    ts_display = save_dt.strftime("%d-%m-%Y %H:%M:%S")
+    ts_file = save_dt.strftime("%Y-%m-%d_%H-%M-%S")
 
     nama_clean = sanitize_name(nama)
     hp_clean = sanitize_phone(no_hp)
