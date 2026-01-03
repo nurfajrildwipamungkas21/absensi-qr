@@ -82,6 +82,13 @@ COL_DBX_PATH = "Dropbox Path"
 
 SHEET_COLUMNS = [COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, COL_LINK_SELFIE, COL_DBX_PATH]
 
+# ✅ Header atas untuk file XLSX (merged di atas tabel)
+EXPORT_TOP_HEADER_LINES = [
+    "JALA",
+    "Eastparc Hotel Yogyakarta",
+    "09 January 2025",
+]
+
 
 # =========================
 # UI THEME (CSS)
@@ -860,7 +867,7 @@ def get_rekap_today() -> Dict:
 # =========================
 # EXPORT
 # =========================
-HYPERLINK_RE = re.compile(r'=HYPERLINK\\("(?P<url>.*?)"\\s*,\\s*"(?P<label>.*?)"\\)', re.IGNORECASE)
+HYPERLINK_RE = re.compile(r'=HYPERLINK\("(?P<url>.*?)"\s*,\s*"(?P<label>.*?)"\)', re.IGNORECASE)
 
 
 def extract_hyperlink_url(formula_or_value: str) -> str:
@@ -885,46 +892,93 @@ def make_csv_bytes(header: List[str], rows: List[List[str]]) -> bytes:
     """
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
-    buf.write("sep=;\\n")
+    buf.write("sep=;\n")
     writer.writerow(header)
     for r in rows:
         writer.writerow(r)
     return buf.getvalue().encode("utf-8-sig")
 
 
-def make_xlsx_bytes(sheet_name: str, header: List[str], rows: List[List[str]], hyperlink_col: Optional[int] = None) -> bytes:
+def make_xlsx_bytes(
+    sheet_name: str,
+    header: List[str],
+    rows: List[List[str]],
+    hyperlink_col: Optional[int] = None,
+    top_header_lines: Optional[List[str]] = None,
+) -> bytes:
     if not OPENPYXL_AVAILABLE:
         raise RuntimeError("openpyxl belum terpasang. Tambahkan 'openpyxl' ke requirements.txt")
+
+    top_header_lines = top_header_lines or []
 
     wb = Workbook()
     ws = wb.active
     ws.title = sheet_name[:31]
 
+    n_cols = len(header)
+
+    # --- Styles
+    title_font = Font(bold=True, size=18, color="0A2540")
+    subtitle_font = Font(bold=True, size=12, color="0A2540")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
     header_fill = PatternFill("solid", fgColor="EAF3FF")
     header_font = Font(bold=True, color="0A2540")
     header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
+    body_align = Alignment(vertical="top", wrap_text=True)
+
+    current_row = 0
+
+    # --- Top header (3 baris) + merge A..last
+    if top_header_lines:
+        for i, line in enumerate(top_header_lines, start=1):
+            ws.append([line] + [""] * (n_cols - 1))
+            current_row += 1
+
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=n_cols)
+            c = ws.cell(row=current_row, column=1)
+            c.alignment = center
+            c.font = title_font if i == 1 else subtitle_font
+
+            # tinggi baris biar proporsional
+            ws.row_dimensions[current_row].height = 26 if i == 1 else 18
+
+        # spacer row
+        ws.append([""] * n_cols)
+        current_row += 1
+        ws.row_dimensions[current_row].height = 8
+
+    # --- Table header (kolom-kolom)
     ws.append(header)
-    for col_idx in range(1, len(header) + 1):
-        c = ws.cell(row=1, column=col_idx)
+    current_row += 1
+    table_header_row = current_row
+
+    for col_idx in range(1, n_cols + 1):
+        c = ws.cell(row=table_header_row, column=col_idx)
         c.fill = header_fill
         c.font = header_font
         c.alignment = header_align
 
-    ws.freeze_panes = "A2"
+    ws.row_dimensions[table_header_row].height = 20
 
+    # Freeze sampai baris header tabel (biar scroll tetap enak)
+    data_start_row = table_header_row + 1
+    ws.freeze_panes = f"A{data_start_row}"
+
+    # --- Data rows
     for r in rows:
         ws.append(r)
 
-    body_align = Alignment(vertical="top", wrap_text=True)
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=len(header)):
+    # --- Body alignment
+    for row in ws.iter_rows(min_row=data_start_row, max_row=ws.max_row, min_col=1, max_col=n_cols):
         for cell in row:
             cell.alignment = body_align
 
-    # hyperlink_col = index 0-based
+    # --- Hyperlink handling (kolom URL)
     if hyperlink_col is not None and 0 <= hyperlink_col < len(header):
         col_excel = hyperlink_col + 1
-        for row_idx in range(2, ws.max_row + 1):
+        for row_idx in range(data_start_row, ws.max_row + 1):
             cell = ws.cell(row=row_idx, column=col_excel)
             url = str(cell.value or "").strip()
             if url.startswith("http://") or url.startswith("https://"):
@@ -932,7 +986,7 @@ def make_xlsx_bytes(sheet_name: str, header: List[str], rows: List[List[str]], h
                 cell.hyperlink = url
                 cell.font = Font(color="0B66E4", underline="single")
 
-    # Column widths rapi
+    # --- Column widths
     preset_widths = {}
     for i, col_name in enumerate(header):
         name = col_name.lower()
@@ -1304,13 +1358,25 @@ Unduh data dengan format rapi:
                     if scope.startswith("Rekap"):
                         header, rows = build_export_rekap_today(rekap)
                         base = f"rekap_hadir_{rekap['today'].replace('-', '')}_{ts_tag}"
-                        xlsx = make_xlsx_bytes("Rekap Hari Ini", header, rows, hyperlink_col=None)
+                        xlsx = make_xlsx_bytes(
+                            "Rekap Hari Ini",
+                            header,
+                            rows,
+                            hyperlink_col=None,
+                            top_header_lines=EXPORT_TOP_HEADER_LINES,
+                        )
                         csv_b = make_csv_bytes(header, rows)
                     else:
                         header, rows = fetch_log_full()
                         base = f"log_absensi_{ts_tag}"
                         # hyperlink_col = kolom "Bukti Selfie (URL)" => index 4
-                        xlsx = make_xlsx_bytes("Log Absensi", header, rows, hyperlink_col=4)
+                        xlsx = make_xlsx_bytes(
+                            "Log Absensi",
+                            header,
+                            rows,
+                            hyperlink_col=4,
+                            top_header_lines=EXPORT_TOP_HEADER_LINES,
+                        )
                         csv_b = make_csv_bytes(header, rows)
 
                     st.session_state.export_xlsx = xlsx
