@@ -83,10 +83,11 @@ COL_DBX_PATH = "Dropbox Path"
 SHEET_COLUMNS = [COL_TIMESTAMP, COL_NAMA, COL_HP, COL_POSISI, COL_LINK_SELFIE, COL_DBX_PATH]
 
 # ✅ Header atas untuk file XLSX (merged di atas tabel)
+# Revisi: baris 2 jadi satu, tahun jadi 2026, tambah "Kick Off Meeting 2026"
 EXPORT_TOP_HEADER_LINES = [
     "JALA",
-    "Eastparc Hotel Yogyakarta",
-    "09 January 2025",
+    "Eastparc Hotel Yogyakarta, 09 January 2026",
+    "Kick Off Meeting 2026",
 ]
 
 
