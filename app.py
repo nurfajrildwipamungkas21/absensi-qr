@@ -1009,27 +1009,6 @@ def make_xlsx_bytes(
     for col_idx, w in preset_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = w
 
-    # =========================
-    # ✅ AUTO RAPIH SAAT DIBUKA DI EXCEL
-    # - hide kolom setelah kolom terakhir (jadi G, H, I, dst tidak terlihat)
-    # - gridlines dimatikan supaya terlihat "bersih"
-    # - print area dibatasi agar presisi saat print/export
-    # =========================
-    HIDE_EXTRA_COLS_UNTIL = 200  # cukup jauh tanpa bikin file berat
-    for col_idx in range(n_cols + 1, HIDE_EXTRA_COLS_UNTIL + 1):
-        ws.column_dimensions[get_column_letter(col_idx)].hidden = True
-
-    # tampilan lebih clean
-    ws.sheet_view.showGridLines = False
-
-    # fokus awal di A1
-    ws.sheet_view.topLeftCell = "A1"
-
-    # batasi area print hanya tabel (opsional tapi bikin presisi)
-    ws.print_area = f"A1:{get_column_letter(n_cols)}{ws.max_row}"
-    ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 0
-
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
