@@ -132,23 +132,6 @@ h1,h2,h3,h4, p, label, .stMarkdown, .stCaption {{
   color: var(--jala-text) !important;
 }}
 
-/* ✅ Logo di atas header */
-.jala-logo-wrap {{
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin: 0.35rem 0 -0.15rem 0;
-}}
-.jala-logo {{
-  height: 54px;
-  width: auto;
-  object-fit: contain;
-  filter: drop-shadow(0 10px 22px rgba(11, 102, 228, 0.18));
-}}
-@media (max-width: 480px) {{
-  .jala-logo {{ height: 46px; }}
-}}
-
 .jala-topbar {{
   background: linear-gradient(135deg, var(--jala-accent) 0%, var(--jala-primary) 62%, #0B4CC7 100%);
   border-radius: 18px;
@@ -168,26 +151,38 @@ h1,h2,h3,h4, p, label, .stMarkdown, .stCaption {{
   background: rgba(255,255,255,0.16);
   border-radius: 999px;
 }}
+
 .jala-brand {{
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: center; /* center header */
   position: relative;
   z-index: 2;
+  gap: 12px;
 }}
-.jala-wordmark {{
-  font-size: 26px;
-  font-weight: 900;
-  letter-spacing: 0.22em;
-  color: #FFFFFF !important;
-  line-height: 1.0;
+
+.jala-brand-center {{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }}
-.jala-tagline {{
-  margin-top: 6px;
-  font-size: 13px;
+
+.jala-logo {{
+  height: 44px;
+  width: auto;
+  object-fit: contain;
+  /* bikin logo jadi putih (logo biru -> putih) */
+  filter: brightness(0) invert(1);
+}}
+
+.jala-subtitle {{
+  font-size: 12px;
   color: rgba(255,255,255,0.92) !important;
+  text-align: center;
+  margin-top: 0;
 }}
+
 .jala-chip {{
   display: inline-flex;
   align-items: center;
@@ -199,6 +194,16 @@ h1,h2,h3,h4, p, label, .stMarkdown, .stCaption {{
   background: rgba(255,255,255,0.16);
   border: 1px solid rgba(255,255,255,0.22);
   white-space: nowrap;
+
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+}}
+
+@media (max-width: 520px) {{
+  .jala-chip {{ display: none; }}
+  .jala-logo {{ height: 40px; }}
 }}
 
 .jala-card {{
@@ -358,6 +363,7 @@ def _abs_path(rel_path: str) -> str:
     base = os.path.dirname(__file__)
     return os.path.join(base, rel_path)
 
+
 @st.cache_data(show_spinner=False)
 def load_logo_data_uri(path: str) -> str:
     if not path:
@@ -376,24 +382,15 @@ def load_logo_data_uri(path: str) -> str:
 
 def render_header(chip_text: str, subtitle: str):
     logo_uri = load_logo_data_uri(LOGO_PATH)
-
-    if logo_uri:
-        st.markdown(
-            f"""
-<div class="jala-logo-wrap">
-  <img class="jala-logo" src="{logo_uri}" alt="{BRAND_NAME} logo"/>
-</div>
-            """,
-            unsafe_allow_html=True,
-        )
+    logo_html = f'<img class="jala-logo" src="{logo_uri}" alt="{BRAND_NAME} logo"/>' if logo_uri else ""
 
     st.markdown(
         f"""
 <div class="jala-topbar">
   <div class="jala-brand">
-    <div>
-      <div class="jala-wordmark">{BRAND_NAME}</div>
-      <div class="jala-tagline">{subtitle}</div>
+    <div class="jala-brand-center">
+      {logo_html}
+      <div class="jala-subtitle">{subtitle}</div>
     </div>
     <div class="jala-chip">{chip_text}</div>
   </div>
@@ -594,14 +591,16 @@ def auto_format_absensi_sheet(ws):
         # Center Timestamp & HP
         requests.append({
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 0, "endColumnIndex": 1},
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count,
+                          "startColumnIndex": 0, "endColumnIndex": 1},
                 "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
                 "fields": "userEnteredFormat(horizontalAlignment)"
             }
         })
         requests.append({
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 2, "endColumnIndex": 3},
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count,
+                          "startColumnIndex": 2, "endColumnIndex": 3},
                 "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
                 "fields": "userEnteredFormat(horizontalAlignment)"
             }
@@ -610,7 +609,8 @@ def auto_format_absensi_sheet(ws):
         # Wrap Dropbox Path
         requests.append({
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count, "startColumnIndex": 5, "endColumnIndex": 6},
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": row_count,
+                          "startColumnIndex": 5, "endColumnIndex": 6},
                 "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
                 "fields": "userEnteredFormat(wrapStrategy)"
             }
@@ -700,9 +700,9 @@ def upload_selfie_to_dropbox(dbx, img_bytes: bytes, nama: str, ts_file: str, ext
 def normalize_posisi(text: str) -> str:
     t = str(text or "").strip().lower()
     t = t.replace("&", " dan ")
-    t = re.sub(r"[/,_\-\.]+", " ", t)
-    t = re.sub(r"[^a-z0-9\s]+", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"[/,_\\-\\.]+", " ", t)
+    t = re.sub(r"[^a-z0-9\\s]+", " ", t)
+    t = re.sub(r"\\s+", " ", t).strip()
     return t
 
 
@@ -802,7 +802,7 @@ def get_rekap_today() -> Dict:
     dup_removed = 0
     people_by_pos = defaultdict(list)
     all_people = []
-    known_canon = []
+    known_canon: List[str] = []
 
     for r in data:
         ts = (r[0] if len(r) > 0 else "") or ""
@@ -860,7 +860,8 @@ def get_rekap_today() -> Dict:
 # =========================
 # EXPORT
 # =========================
-HYPERLINK_RE = re.compile(r'=HYPERLINK\("(?P<url>.*?)"\s*,\s*"(?P<label>.*?)"\)', re.IGNORECASE)
+HYPERLINK_RE = re.compile(r'=HYPERLINK\\("(?P<url>.*?)"\\s*,\\s*"(?P<label>.*?)"\\)', re.IGNORECASE)
+
 
 def extract_hyperlink_url(formula_or_value: str) -> str:
     s = str(formula_or_value or "").strip()
@@ -884,7 +885,7 @@ def make_csv_bytes(header: List[str], rows: List[List[str]]) -> bytes:
     """
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
-    buf.write("sep=;\n")
+    buf.write("sep=;\\n")
     writer.writerow(header)
     for r in rows:
         writer.writerow(r)
@@ -993,7 +994,14 @@ def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
         url = extract_hyperlink_url(bukti)
         bukti_out = url if url else ""
 
-        if not (str(ts).strip() or str(nama).strip() or str(hp).strip() or str(pos).strip() or str(bukti_out).strip() or str(dbx_path).strip()):
+        if not (
+            str(ts).strip()
+            or str(nama).strip()
+            or str(hp).strip()
+            or str(pos).strip()
+            or str(bukti_out).strip()
+            or str(dbx_path).strip()
+        ):
             continue
 
         rows.append([
@@ -1001,7 +1009,7 @@ def fetch_log_full() -> Tuple[List[str], List[List[str]]]:
             str(nama).strip(),
             str(hp).strip(),
             str(pos).strip(),
-            str(bukti_out).strip(),   # URL
+            str(bukti_out).strip(),  # URL
             str(dbx_path).strip(),
         ])
 
@@ -1080,7 +1088,6 @@ if mode != "absen":
         use_container_width=True
     )
 
-    # (mengganti tombol "Tes Link Absensi" -> jadi info admin saja)
     with st.expander("ℹ️ Info Admin"):
         st.write("**Link Form Absensi:**")
         st.code(qr_url_effective, language="text")
@@ -1165,7 +1172,6 @@ if submit:
         st.stop()
 
     nama_clean = sanitize_name(nama)
-    # FIX: variabel no_hp yang benar adalah `no_hp`
     hp_clean = sanitize_phone(no_hp)
     posisi_final = str(posisi).strip()
     img_bytes, ext = get_selfie_bytes(selfie_cam, selfie_upload)
